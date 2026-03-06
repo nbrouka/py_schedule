@@ -1,0 +1,70 @@
+name: Schedule Parser
+
+on:
+  # Run nightly at 2:00 AM UTC (5:00 AM Minsk time)
+  schedule:
+    - cron: '0 2 * * *'
+  # Allow manual trigger
+  workflow_dispatch:
+  # Run on push to main branch
+  push:
+    branches:
+      - main
+
+env:
+  python-version: '3.11'
+
+jobs:
+  parse-schedule:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.python-version }}
+      
+      - name: Install dependencies
+        run: |
+          pip install requests pdfplumber pillow gdown python-dotenv
+      
+      - name: Run parser
+        env:
+          FOLDER_ID: ${{ secrets.FOLDER_ID }}
+          TARGET_TEACHER: ${{ secrets.TARGET_TEACHER }}
+        run: |
+          python parser.py
+      
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --name-only | grep -q "schedule.json"; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Commit and push changes
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Add schedule.json changes
+          git add schedule.json
+          
+          # Commit changes
+          git commit -m "Update schedule.json - $(date '+%Y-%m-%d %H:%M')" || exit 0
+          
+          # Push changes
+          git push
+        
+      - name: No changes detected
+        if: steps.changes.outputs.changed == 'false'
+        run: echo "No schedule changes detected"
