@@ -50,16 +50,29 @@ jobs:
       - name: Check for changes
         id: changes
         run: |
-          # Check if schedule.json has actual changes vs committed version
-          if [ -f schedule.json ]; then
-            if git diff HEAD -- schedule.json | grep -q .; then
+          echo "Checking schedule.json changes..."
+          
+          # Check if schedule.json exists in HEAD (previous commit)
+          if git show HEAD:schedule.json > /dev/null 2>&1; then
+            echo "schedule.json exists in HEAD, comparing..."
+            git diff HEAD -- schedule.json > /tmp/schedule_diff.txt
+            if [ -s /tmp/schedule_diff.txt ]; then
+              echo "Changes detected in schedule.json!"
+              cat /tmp/schedule_diff.txt
               echo "changed=true" >> $GITHUB_OUTPUT
             else
+              echo "No changes in schedule.json (same as HEAD)"
               echo "changed=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "schedule.json not found"
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "schedule.json doesn't exist in HEAD - checking if it's a new file..."
+            if [ -f schedule.json ]; then
+              echo "schedule.json exists locally but not in HEAD - NEW FILE!"
+              echo "changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "schedule.json not found locally either"
+              echo "changed=false" >> $GITHUB_OUTPUT
+            fi
           fi
       
       - name: Commit and push changes
