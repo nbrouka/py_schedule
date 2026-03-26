@@ -17,6 +17,8 @@ env:
 jobs:
   parse-schedule:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout repository
@@ -87,8 +89,9 @@ jobs:
           # Commit changes
           git commit -m "Update schedule.json - $(date '+%Y-%m-%d %H:%M')" || exit 0
           
-          # Use token with write access
-          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
+          # Use GITHUB_TOKEN to push - set the remote URL with token
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          git push origin main
         
       - name: No changes detected
         if: steps.changes.outputs.changed == 'false'
