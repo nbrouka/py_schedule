@@ -87,8 +87,8 @@ jobs:
           # Commit changes
           git commit -m "Update schedule.json - $(date '+%Y-%m-%d %H:%M')" || exit 0
           
-          # Push changes
-          git push
+          # Use token with write access
+          git push https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} HEAD:main
         
       - name: No changes detected
         if: steps.changes.outputs.changed == 'false'
