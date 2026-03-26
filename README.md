@@ -40,7 +40,12 @@ source venv/bin/activate  # Linux/Mac
 venv\Scripts\activate  # Windows
 
 # Install dependencies
-pip install requests pdfplumber pillow gdown python-dotenv
+pip install -r requirements.txt
+```
+
+Or with pyproject.toml (Poetry):
+```bash
+poetry install
 ```
 
 ## Configuration
