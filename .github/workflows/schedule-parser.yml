@@ -47,28 +47,20 @@ jobs:
         run: |
           python parser.py
       
-      - name: Debug - List files
-        run: |
-          ls -la
-          if [ -f schedule.json ]; then
-            echo "schedule.json exists"
-            cat schedule.json
-          else
-            echo "schedule.json NOT found"
-          fi
-      
       - name: Check for changes
         id: changes
         run: |
-          if git diff --name-only | grep -q "schedule.json"; then
-            echo "changed=true" >> $GITHUB_OUTPUT
+          # Check if schedule.json has actual changes vs committed version
+          if [ -f schedule.json ]; then
+            if git diff HEAD -- schedule.json | grep -q .; then
+              echo "changed=true" >> $GITHUB_OUTPUT
+            else
+              echo "changed=false" >> $GITHUB_OUTPUT
+            fi
           else
+            echo "schedule.json not found"
             echo "changed=false" >> $GITHUB_OUTPUT
           fi
-      
-      - name: Debug - Git status
-        run: |
-          git status
       
       - name: Commit and push changes
         if: steps.changes.outputs.changed == 'true'
