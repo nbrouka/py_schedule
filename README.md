@@ -126,9 +126,17 @@ When running via GitHub Actions, logs are visible in the Actions tab:
 ## GitHub Actions
 
 The project includes automated GitHub Actions workflow that:
-- Runs nightly at 2:00 AM UTC
+- Runs nightly at 2:00 AM UTC (5:00 AM Minsk time)
 - Can be triggered manually
 - Auto-commits schedule changes if detected
+
+### Workflow Triggers
+
+| Trigger | Description |
+|---------|-------------|
+| **Schedule** | Nightly at 2:00 AM UTC |
+| **Manual** | Workflow dispatch - click "Run workflow" in Actions tab |
+| **Push** | Any push to main branch |
 
 ### Setting Up GitHub Secrets
 
@@ -149,7 +157,7 @@ py_schedule/
 ├── parser.py              # Main parser script
 ├── schedule.json          # Generated output
 ├── WEEK_ALGORITHM.md      # Week detection algorithm
-└── Расписание занятий/    # Source schedules (if local)
+└── venv/                  # Virtual environment (not committed)
     └── ...
 ```
 

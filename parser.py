@@ -11,6 +11,7 @@ import pdfplumber
 import io
 import json
 import re
+import shutil
 import gdown
 from PIL import Image
 from dotenv import load_dotenv
@@ -125,43 +126,138 @@ def analyze_cell_color(cell_image):
     return primary_color, has_division, green_percentage, white_percentage
 
 
+# Day name mapping for Russian day names
+DAY_NAME_MAP = {
+    'понедельник': 'Понедельник', 'пн': 'Понедельник',
+    'вторник': 'Вторник', 'вт': 'Вторник',
+    'среда': 'Среда', 'ср': 'Среда',
+    'четверг': 'Четверг', 'чт': 'Четверг',
+    'пятница': 'Пятница', 'пт': 'Пятница',
+    'суббота': 'Суббота', 'сб': 'Суббота',
+    'воскресенье': 'Воскресенье', 'вс': 'Воскресенье',
+    # Ukrainian versions
+    'понеділок': 'Понедельник', 
+    'вівторок': 'Вторник',
+    'середа': 'Среда', 
+    'четвер': 'Четверг',
+    'п\'ятниця': 'Пятница',
+    'субота': 'Суббота',
+    'неділя': 'Воскресенье',
+    # Reversed versions that may appear
+    'адерС': 'Среда',
+    'гревтеЧ': 'Четверг',
+    'ацинтяП': 'Пятница',
+    'торковийВ': 'Вторник',
+    'локідоп': 'Понедельник',
+}
+
+
 def clean_day_name(day_text):
-    """Clean day name by joining spaced letters."""
+    """Clean day name by handling spaced letters and fixing reversed text."""
     if not day_text:
         return day_text
-    parts = day_text.split(' ')
-    cleaned_parts = []
     
-    p = 0
-    while p < len(parts):
-        current = parts[p]
-        potential_word = current
-        q = p + 1
-        
-        while q < len(parts):
-            next_part = parts[q]
-            should_join = False
-            
-            has_cyrillic_current = any(ord(c) > 1000 for c in potential_word if c.isalpha())
-            has_cyrillic_next = any(ord(c) > 1000 for c in next_part if c.isalpha())
-            
-            if has_cyrillic_current and has_cyrillic_next:
-                if len(potential_word) <= 3 or len(next_part) <= 3:
-                    should_join = True
-            
-            if should_join:
-                potential_word += next_part
-                q += 1
-            else:
-                break
-        
-        cleaned_parts.append(potential_word)
-        p = q
+    # First check if it's a known reversed day name
+    if day_text in DAY_NAME_MAP:
+        return DAY_NAME_MAP[day_text]
     
-    return ' '.join(cleaned_parts)
+    # Remove extra spaces and check again
+    cleaned = ' '.join(day_text.split())
+    if cleaned in DAY_NAME_MAP:
+        return DAY_NAME_MAP[cleaned]
+    
+    # Check for partial reversed text (e.g., "адерС" contains "дерС" -> "Среда")
+    for reversed_key, correct_value in DAY_NAME_MAP.items():
+        if reversed_key in day_text or day_text in reversed_key:
+            return correct_value
+    
+    # Try to fix reversed Cyrillic text (e.g., "адерС" -> "Среда")
+    # Check if text has Cyrillic characters that might be reversed
+    cyrillic_chars = [c for c in day_text if ord(c) > 1000]
+    if cyrillic_chars:
+        # If it looks like a single word that's reversed
+        if len(cyrillic_chars) >= 3:
+            reversed_check = ''.join(reversed(cyrillic_chars))
+            if reversed_check in DAY_NAME_MAP:
+                return DAY_NAME_MAP[reversed_check]
+    
+    # Return cleaned text
+    return cleaned if cleaned else day_text
 
 
-def parse(pdf_bytes, teacher_name):
+def extract_teacher_text(content, teacher_name):
+    """
+    Extract only the text portion belonging to the specified teacher.
+    Handles cases where multiple teachers share a cell.
+    
+    Args:
+        content: Cell content text
+        teacher_name: Teacher name to search for
+        
+    Returns:
+        str: Text portion belonging to the teacher, or full content if can't split
+    """
+    if not content or teacher_name.lower() not in content.lower():
+        return content
+    
+    # Try to find position of teacher name in content
+    teacher_lower = teacher_name.lower()
+    teacher_pos = content.lower().find(teacher_lower)
+    
+    if teacher_pos == -1:
+        return content
+    
+    # Find the start of the teacher's lesson (look for pattern before teacher name)
+    # Pattern: week number (e.g., "1н.", "2н.", "3н.") or range (e.g., "1-12 нед")
+    week_patterns = [
+        r'\d+н\.?',  # 1н., 2н., etc.
+        r'\d+-\d+нед',  # 1-12 нед
+    ]
+    
+    before_teacher = content[:teacher_pos]
+    
+    # Find the FIRST week pattern (not last) - we need to include the week number
+    first_week_pos = len(content)
+    for pattern in week_patterns:
+        match = re.search(pattern, before_teacher, re.IGNORECASE)
+        if match and match.start() < first_week_pos:
+            first_week_pos = match.start()
+    
+    # If we found a week pattern, start from there
+    if first_week_pos < len(content):
+        start = first_week_pos
+    else:
+        start = 0
+    
+    after_teacher = content[teacher_pos:]
+    
+    # Look for next teacher pattern or next week pattern
+    next_teacher_match = re.search(r'[А-Я][а-я]+\s+[А-Я]\.[А-Я]\.', after_teacher[len(teacher_name):])
+    next_week_match = re.search(r'\d+н\.?', after_teacher[len(teacher_name):], re.IGNORECASE)
+    
+    end_pos = len(content)
+    if next_teacher_match:
+        end_pos = teacher_pos + len(teacher_name) + next_teacher_match.start()
+    elif next_week_match:
+        end_pos = teacher_pos + len(teacher_name) + next_week_match.start()
+    
+    result = content[start:end_pos].strip()
+    if result:
+        return result
+    
+    # Fallback: try to extract just the teacher's segment
+    # Look for pattern: week + subject + teacher
+    # Use regex to extract full lesson info
+    lesson_pattern = r'([\dн\.\s-]+(?:нед\.)?)\s*([^(]+)\s*\([^)]+\)\s*' + re.escape(teacher_name)
+    match = re.search(lesson_pattern, content, re.IGNORECASE)
+    if match:
+        return match.group(0).strip()
+    
+    # If can't properly extract, return full content
+    return content
+
+
+def parse(pdf_bytes, teacher_name, default_group=""):
     """
     Parse PDF bytes and extract schedule information.
     
@@ -215,7 +311,8 @@ def parse(pdf_bytes, teacher_name):
                             if col_idx >= num_cols: break
                             if cell:
                                 cell_text = cell.replace('\n', ' ').strip()
-                                group_match = re.search(r'\d{2}-[À-ßA-Z]{2,}', cell_text)
+                                # Fix: Use Cyrillic pattern for group detection
+                                group_match = re.search(r'\d{2}-[А-Яа-яЁё]+', cell_text)
                                 if group_match:
                                     column_headers[col_idx] = group_match.group(0)
                     
@@ -232,7 +329,8 @@ def parse(pdf_bytes, teacher_name):
                             page_width = page.width
                             top_crop = page.within_bbox((0, 0, page_width, page_height * 0.20))
                             header_text = top_crop.extract_text() or ""
-                            all_groups = re.findall(r'\d{2}-[À-ßA-Z]{2,}', header_text)
+                            # Fix: Use Cyrillic pattern for group detection
+                            all_groups = re.findall(r'\d{2}-[А-Яа-яЁё]+', header_text)
                             
                             if all_groups:
                                 num_data_cols = num_cols - 2
@@ -316,23 +414,27 @@ def parse(pdf_bytes, teacher_name):
                                 else:
                                     week_type = "all"
                                 
-                                parts = re.split(r'(?=\b\d+í\.?\s|[\d-]+íåä\.?\s)', content)
+                                # Fix the regex to use proper Cyrillic characters
+                                parts = re.split(r'(?=\b\d+н\.\s|[\d-]+нед\.\s)', content)
                                 
                                 for part in parts:
                                     if part.strip() and teacher_name.lower() in part.lower():
-                                        clean_part = part.strip()
+                                        # Extract only the teacher's portion from merged cell content
+                                        clean_part = extract_teacher_text(part.strip(), teacher_name)
                                         
-                                        week_match = re.search(r'(\d+)í', clean_part)
+                                        # Fix: Use proper Cyrillic characters for week detection
+                                        week_match = re.search(r'(\d+)н', clean_part)
                                         if week_match:
                                             week_num = int(week_match.group(1))
                                             if week_num % 2 == 0:
                                                 week_type = "green"
                                             else:
                                                 week_type = "white"
-                                        elif '1-12 íåä' in clean_part or '1-14 íåä' in clean_part:
+                                        elif '1-12 нед' in clean_part or '1-14 нед' in clean_part:
                                             week_type = "all"
                                         
-                                        group_info = column_headers[col_idx] if col_idx < len(column_headers) else ""
+                                        # Use detected group or fall back to filename-based group
+                                        group_info = column_headers[col_idx] if col_idx < len(column_headers) and column_headers[col_idx] else default_group
                                         
                                         lesson_key = (group_info, curr_day, curr_time, clean_part)
                                         
@@ -447,9 +549,50 @@ def get_folder_contents_via_page(folder_id):
     return files
 
 
+def convert_docx_to_pdf(docx_path):
+    """
+    Convert DOCX file to PDF using LibreOffice.
+    
+    Args:
+        docx_path: Path to the DOCX file
+        
+    Returns:
+        str: Path to the generated PDF file, or None if conversion failed
+    """
+    import subprocess
+    
+    pdf_path = os.path.splitext(docx_path)[0] + '.pdf'
+    
+    # Skip if PDF already exists
+    if os.path.exists(pdf_path):
+        return pdf_path
+    
+    try:
+        result = subprocess.run(
+            ['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', 
+             os.path.dirname(docx_path) or '.', os.path.basename(docx_path)],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode == 0 and os.path.exists(pdf_path):
+            logger.info(f"  Converted to PDF: {pdf_path}")
+            return pdf_path
+        else:
+            logger.error(f"  Conversion failed: {result.stderr}")
+            return None
+    except FileNotFoundError:
+        logger.error("  LibreOffice not found - cannot convert DOCX to PDF")
+        return None
+    except Exception as e:
+        logger.error(f"  Conversion error: {e}")
+        return None
+
+
 def download_folder_from_drive(folder_id):
     """
-    Download all files from a Google Drive folder as PDF.
+    Download all files from a Google Drive folder and convert to PDF.
     
     Args:
         folder_id: Google Drive folder ID
@@ -465,113 +608,69 @@ def download_folder_from_drive(folder_id):
     logger.info(f"\nDownloading files from Google Drive folder...")
     logger.info(f"Folder URL: {url}")
     
-    downloaded_files = []
+    downloaded_pdfs = []
     
     try:
-        # Get list of files in the folder
-        logger.info("\nFetching folder contents...")
-        files = get_folder_contents(folder_id)
+        # Use gdown to download the folder (works with both Google Docs and .docx files)
+        logger.info("\nDownloading folder with gdown...")
         
-        if not files:
-            logger.warning("  No files found or unable to access folder")
-            logger.warning("  Trying gdown download_folder as fallback...")
-            return download_folder_via_gdown(folder_id)
-        
-        logger.info(f"  Found {len(files)} file(s)")
-        
-        # Export each file as PDF
-        logger.info(f"\nExporting {len(files)} file(s) as PDF...")
-        
-        for file_info in files:
-            file_id = file_info['id']
-            file_name = file_info['name']
-            mime_type = file_info.get('mimeType', '')
-            
-            logger.info(f"\nExporting: {file_name}")
-            
-            # Clean filename for output
-            safe_name = re.sub(r'[^\w\s\-\.\u0400-\u04FF]', '', file_name)
-            if safe_name.endswith('.docx') or safe_name.endswith('.doc'):
-                safe_name = safe_name.rsplit('.', 1)[0] + '.pdf'
-            elif not safe_name.endswith('.pdf'):
-                safe_name = safe_name + '.pdf'
-            
-            output_path = os.path.join(os.getcwd(), safe_name)
-            
-            # Export as PDF from Google Docs
-            export_url = f"https://docs.google.com/document/d/{file_id}/export?format=pdf"
-            
-            try:
-                resp = requests.get(export_url, timeout=60)
-                if resp.status_code == 200 and b'%PDF' in resp.content[:10]:
-                    with open(output_path, 'wb') as f:
-                        f.write(resp.content)
-                    print(f"  Exported as PDF: {safe_name}")
-                    downloaded_files.append(output_path)
-                else:
-                    print(f"  Failed to export: HTTP {resp.status_code}")
-                    # Check if response is HTML (login page)
-                    if b'html' in resp.content[:100].lower():
-                        print(f"  Note: File may require authentication or is not a Google Doc")
-            except Exception as e:
-                print(f"  Error: {e}")
-                
-    except Exception as e:
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    return downloaded_files
-
-
-def download_folder_via_gdown(folder_id):
-    """
-    Fallback method using gdown.download_folder.
-    Downloads files and then exports them as PDF.
-    """
-    import tempfile
-    import shutil
-    
-    url = f'https://drive.google.com/drive/folders/{folder_id}'
-    downloaded_files = []
-    
-    try:
+        # Download to a temporary directory
+        import tempfile
         temp_dir = tempfile.mkdtemp(prefix='schedule_')
         
-        # Download folder using gdown
-        logger.info(f"  Downloading to temp directory...")
         gdown.download_folder(url, quiet=False, use_cookies=False, output=temp_dir)
         
-        # Find all downloaded files
+        # Find and convert all docx files to PDF
+        logger.info("\nConverting DOCX files to PDF...")
+        
         for root, dirs, files in os.walk(temp_dir):
             for file in files:
                 temp_path = os.path.join(root, file)
-                logger.info(f"\n  Downloaded: {file}")
+                logger.info(f"\nProcessing: {file}")
                 
-                # If it's a PDF, just copy it
                 if file.endswith('.pdf'):
+                    # PDF - copy to current directory
                     safe_name = re.sub(r'[^\w\s\-\.\u0400-\u04FF]', '', file)
                     output_path = os.path.join(os.getcwd(), safe_name)
                     shutil.copy(temp_path, output_path)
-                    downloaded_files.append(output_path)
-                    logger.info(f"    Copied: {safe_name}")
+                    downloaded_pdfs.append(output_path)
+                    logger.info(f"  Copied PDF: {safe_name}")
+                    
+                elif file.endswith('.docx') or file.endswith('.doc'):
+                    # DOCX - convert to PDF first
+                    docx_path = os.path.join(os.getcwd(), file)
+                    shutil.copy(temp_path, docx_path)
+                    
+                    pdf_path = convert_docx_to_pdf(docx_path)
+                    if pdf_path:
+                        downloaded_pdfs.append(pdf_path)
+                        # Remove the original docx to save space
+                        try:
+                            os.remove(docx_path)
+                        except:
+                            pass
+                    else:
+                        logger.warning(f"  Could not convert: {file}")
                 else:
-                    # For non-PDF files, try to find the Google Doc ID and export
-                    # This is a limitation - we can't easily get the Doc ID from downloaded file
-                    logger.warning(f"    Note: Non-PDF file downloaded but not converted")
+                    logger.warning(f"  Skipping non-supported file: {file}")
         
         # Clean up temp directory
         try:
             shutil.rmtree(temp_dir)
         except:
             pass
-            
+        
     except Exception as e:
-        logger.error(f"  gdown fallback error: {e}")
+        logger.error(f"Error downloading folder: {e}")
         import traceback
         traceback.print_exc()
     
-    return downloaded_files
+    logger.info(f"\nTotal PDF files ready: {len(downloaded_pdfs)}")
+    return downloaded_pdfs
+
+
+    # Remove the old fallback function as it's now integrated
+    pass  # download_folder_via_gdown is now part of download_folder_from_drive
 
 
 def find_teacher_schedule_files(teacher_name, downloaded_files):
@@ -639,7 +738,14 @@ if __name__ == "__main__":
                 try:
                     with open(file_path, 'rb') as f:
                         pdf_data = f.read()
-                    lessons = parse(pdf_data, TARGET_TEACHER)
+                    
+                    # Extract group from filename (e.g., "24-МС_24-СТ_24-ВС.pdf" -> "24-МС")
+                    import os
+                    filename = os.path.basename(file_path)
+                    filename_group = re.search(r'(\d+-[А-Яа-я]+)', filename)
+                    default_group = filename_group.group(1) if filename_group else ""
+                    
+                    lessons = parse(pdf_data, TARGET_TEACHER, default_group)
                     all_lessons.extend(lessons)
                     logger.info(f"  Found lessons: {len(lessons)}")
                 except Exception as e:
