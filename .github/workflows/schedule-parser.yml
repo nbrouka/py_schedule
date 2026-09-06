@@ -44,7 +44,11 @@ jobs:
       
       - name: Run parser
         env:
+          STORAGE_TYPE: ${{ secrets.STORAGE_TYPE }}
           FOLDER_ID: ${{ secrets.FOLDER_ID }}
+          NEXTCLOUD_URL: ${{ secrets.NEXTCLOUD_URL }}
+          NEXTCLOUD_USERNAME: ${{ secrets.NEXTCLOUD_USERNAME }}
+          NEXTCLOUD_PASSWORD: ${{ secrets.NEXTCLOUD_PASSWORD }}
           TARGET_TEACHER: ${{ secrets.TARGET_TEACHER }}
         run: |
           python parser.py

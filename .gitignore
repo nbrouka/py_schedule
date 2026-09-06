@@ -27,3 +27,6 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Downloaded schedule PDFs
+pdfs/

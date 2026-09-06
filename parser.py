@@ -16,6 +16,9 @@ import gdown
 from PIL import Image
 from dotenv import load_dotenv
 
+from converter import convert_docx_to_pdf
+from storage import create_storage
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -36,14 +39,7 @@ load_dotenv()
 # Configuration
 TARGET_TEACHER = os.getenv('TARGET_TEACHER', "Бровко Н.В.")  # Can be overridden via command line
 
-# Google Drive folder ID from environment variable
-FOLDER_ID = os.getenv('FOLDER_ID')
-
-# Validate required configuration
-if not FOLDER_ID or FOLDER_ID == "your_folder_id_here":
-    logger.error("Error: FOLDER_ID is not set")
-    logger.error("Please set FOLDER_ID in .env file or GitHub secrets")
-    exit(1)
+# Storage strategy will be initialized in main block based on STORAGE_TYPE
 
 
 def get_pdf_content(doc_id):
@@ -147,8 +143,8 @@ DAY_NAME_MAP = {
     'адерС': 'Среда',
     'гревтеЧ': 'Четверг',
     'ацинтяП': 'Пятница',
-    'торковийВ': 'Вторник',
-    'локідоп': 'Понедельник',
+    'кинротВ': 'Вторник',
+    'киньледеноП': 'Понедельник',
 }
 
 
@@ -461,216 +457,13 @@ def parse(pdf_bytes, teacher_name, default_group=""):
     return lessons
 
 
-def get_folder_contents(folder_id):
-    """
-    Get list of files in a Google Drive folder using Google Drive API v3.
-    
-    Args:
-        folder_id: Google Drive folder ID
-        
-    Returns:
-        list: List of dicts with 'id', 'name', 'mimeType' for each file
-    """
-    import urllib.parse
-    
-    files = []
-    
-    # Use the Drive API to list files
-    api_url = f"https://www.googleapis.com/drive/v3/files"
-    
-    params = {
-        'q': f"'{folder_id}' in parents and trashed = false",
-        'fields': 'files(id, name, mimeType)',
-        'pageSize': 100
-    }
-    
-    try:
-        # First try without API key (public folders)
-        response = requests.get(api_url, params=params, timeout=30)
-        
-        if response.status_code == 200:
-            data = response.json()
-            files = data.get('files', [])
-        else:
-            # Try alternative method: parse folder page
-            logger.warning(f"Drive API returned {response.status_code}, trying alternative method...")
-            files = get_folder_contents_via_page(folder_id)
-    except Exception as e:
-        logger.error(f"Error accessing Drive API: {e}")
-        files = get_folder_contents_via_page(folder_id)
-    
-    return files
 
 
-def get_folder_contents_via_page(folder_id):
-    """
-    Alternative method to get folder contents by parsing the folder's HTML page.
-    """
-    files = []
-    
-    folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
-    
-    try:
-        response = requests.get(folder_url, timeout=30)
-        if response.status_code == 200:
-            html = response.text
-            
-            # Look for file IDs in the HTML
-            # Pattern: "id":"xxxxx","name":"filename"
-            import re
-            
-            # Try to extract file info from JavaScript data
-            # Look for patterns like: [["xxxxx","filename",...]]
-            file_pattern = r'\["([a-zA-Z0-9_-]{20,})","([^"]+)"'
-            matches = re.findall(file_pattern, html)
-            
-            for file_id, file_name in matches:
-                files.append({
-                    'id': file_id,
-                    'name': file_name,
-                    'mimeType': 'application/vnd.google-apps.document'
-                })
-            
-            if not files:
-                # Try another pattern
-                # Look for: /d/{file_id}/
-                id_pattern = r'/d/([a-zA-Z0-9_-]{20,})/'
-                ids = re.findall(id_pattern, html)
-                for file_id in set(ids):
-                    if file_id != folder_id:
-                        files.append({
-                            'id': file_id,
-                            'name': f'document_{file_id[:8]}',
-                            'mimeType': 'application/vnd.google-apps.document'
-                        })
-    except Exception as e:
-        logger.error(f"  Error parsing folder page: {e}")
-    
-    return files
 
 
-def convert_docx_to_pdf(docx_path):
-    """
-    Convert DOCX file to PDF using LibreOffice.
-    
-    Args:
-        docx_path: Path to the DOCX file
-        
-    Returns:
-        str: Path to the generated PDF file, or None if conversion failed
-    """
-    import subprocess
-    
-    pdf_path = os.path.splitext(docx_path)[0] + '.pdf'
-    
-    # Skip if PDF already exists
-    if os.path.exists(pdf_path):
-        return pdf_path
-    
-    try:
-        result = subprocess.run(
-            ['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', 
-             os.path.dirname(docx_path) or '.', os.path.basename(docx_path)],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        
-        if result.returncode == 0 and os.path.exists(pdf_path):
-            logger.info(f"  Converted to PDF: {pdf_path}")
-            return pdf_path
-        else:
-            logger.error(f"  Conversion failed: {result.stderr}")
-            return None
-    except FileNotFoundError:
-        logger.error("  LibreOffice not found - cannot convert DOCX to PDF")
-        return None
-    except Exception as e:
-        logger.error(f"  Conversion error: {e}")
-        return None
 
 
-def download_folder_from_drive(folder_id):
-    """
-    Download all files from a Google Drive folder and convert to PDF.
-    
-    Args:
-        folder_id: Google Drive folder ID
-        
-    Returns:
-        list: List of paths to downloaded PDF files
-    """
-    if not folder_id:
-        logger.error("Error: FOLDER_ID environment variable is not set")
-        return []
-    
-    url = f'https://drive.google.com/drive/folders/{folder_id}'
-    logger.info(f"\nDownloading files from Google Drive folder...")
-    logger.info(f"Folder URL: {url}")
-    
-    downloaded_pdfs = []
-    
-    try:
-        # Use gdown to download the folder (works with both Google Docs and .docx files)
-        logger.info("\nDownloading folder with gdown...")
-        
-        # Download to a temporary directory
-        import tempfile
-        temp_dir = tempfile.mkdtemp(prefix='schedule_')
-        
-        gdown.download_folder(url, quiet=False, use_cookies=False, output=temp_dir)
-        
-        # Find and convert all docx files to PDF
-        logger.info("\nConverting DOCX files to PDF...")
-        
-        for root, dirs, files in os.walk(temp_dir):
-            for file in files:
-                temp_path = os.path.join(root, file)
-                logger.info(f"\nProcessing: {file}")
-                
-                if file.endswith('.pdf'):
-                    # PDF - copy to current directory
-                    safe_name = re.sub(r'[^\w\s\-\.\u0400-\u04FF]', '', file)
-                    output_path = os.path.join(os.getcwd(), safe_name)
-                    shutil.copy(temp_path, output_path)
-                    downloaded_pdfs.append(output_path)
-                    logger.info(f"  Copied PDF: {safe_name}")
-                    
-                elif file.endswith('.docx') or file.endswith('.doc'):
-                    # DOCX - convert to PDF first
-                    docx_path = os.path.join(os.getcwd(), file)
-                    shutil.copy(temp_path, docx_path)
-                    
-                    pdf_path = convert_docx_to_pdf(docx_path)
-                    if pdf_path:
-                        downloaded_pdfs.append(pdf_path)
-                        # Remove the original docx to save space
-                        try:
-                            os.remove(docx_path)
-                        except:
-                            pass
-                    else:
-                        logger.warning(f"  Could not convert: {file}")
-                else:
-                    logger.warning(f"  Skipping non-supported file: {file}")
-        
-        # Clean up temp directory
-        try:
-            shutil.rmtree(temp_dir)
-        except:
-            pass
-        
-    except Exception as e:
-        logger.error(f"Error downloading folder: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    logger.info(f"\nTotal PDF files ready: {len(downloaded_pdfs)}")
-    return downloaded_pdfs
 
-
-    # Remove the old fallback function as it's now integrated
-    pass  # download_folder_via_gdown is now part of download_folder_from_drive
 
 
 def find_teacher_schedule_files(teacher_name, downloaded_files):
@@ -708,19 +501,25 @@ def find_teacher_schedule_files(teacher_name, downloaded_files):
 
 
 if __name__ == "__main__":
-    import sys
-    
-    # Allow teacher name to be passed as command line argument
     if len(sys.argv) > 1:
         TARGET_TEACHER = sys.argv[1]
     
     logger.info(f"Target teacher: {TARGET_TEACHER}")
+    logger.info(f"Storage type: {os.getenv('STORAGE_TYPE', 'google_drive')}")
     
-    # Download files from Google Drive folder
-    downloaded_files = download_folder_from_drive(FOLDER_ID)
+    pdfs_dir = os.path.join(os.getcwd(), 'pdfs')
+    os.makedirs(pdfs_dir, exist_ok=True)
+    
+    try:
+        storage = create_storage()
+    except ValueError as e:
+        logger.error(str(e))
+        exit(1)
+    
+    downloaded_files = storage.get_schedule_files()
     
     if not downloaded_files:
-        logger.warning("\nNo files downloaded from Google Drive folder")
+        logger.warning("\nNo files downloaded from storage")
     else:
         # Find files containing the teacher
         teacher_files = find_teacher_schedule_files(TARGET_TEACHER, downloaded_files)

@@ -1,11 +1,11 @@
 # Schedule Parser
 
-A Python-based tool for extracting teacher schedules from university schedule documents stored in Google Drive.
+A Python-based tool for extracting teacher schedules from university schedule documents using pluggable storage backends (Google Drive, Nextcloud, etc.).
 
 ## Overview
 
 This project automatically:
-1. Downloads schedule documents from a Google Drive folder
+1. Downloads schedule documents from a configured storage backend
 2. Parses PDF schedules to extract class information
 3. Filters classes by teacher name
 4. Determines week types (green/white/both/all) based on cell colors
@@ -13,7 +13,9 @@ This project automatically:
 
 ## Features
 
-- **Automatic Google Drive integration** - Downloads schedules directly from Drive
+- **Pluggable storage backends** via Strategy pattern:
+  - `google_drive` - Downloads schedules from Google Drive
+  - `nextcloud` - Downloads schedules from Nextcloud public shares
 - **Week type detection** - Analyzes cell colors to determine when classes occur:
   - `green` - Even weeks (2, 4, 6, 8, 10, 12, 14)
   - `white` - Odd weeks (1, 3, 5, 7, 9, 11, 13)
@@ -24,7 +26,8 @@ This project automatically:
 ## Requirements
 
 - Python 3.11+
-- Google Drive folder with schedule documents
+- LibreOffice (for DOCX to PDF conversion)
+- Storage backend: Google Drive folder or Nextcloud share with schedule documents
 
 ## Installation
 
@@ -51,15 +54,28 @@ poetry install
 ## Configuration
 
 1. Copy the sample environment file:
-   ```bash
-   cp sample.env .env
-   ```
+    ```bash
+    cp sample.env .env
+    ```
 
 2. Edit `.env` with your settings:
-   ```env
-   FOLDER_ID=your_google_drive_folder_id
-   TARGET_TEACHER=Бровко Н.В.
-   ```
+    ```env
+    # Select storage backend: google_drive or nextcloud
+    STORAGE_TYPE=google_drive
+
+    # Google Drive folder ID (used when STORAGE_TYPE=google_drive)
+    FOLDER_ID=your_google_drive_folder_id_here
+
+    # Nextcloud share URL (used when STORAGE_TYPE=nextcloud)
+    NEXTCLOUD_URL=https://nextcloud.psu.by/index.php/s/no5zKbMrns6j5jQ?dir=/2026-2027/...
+
+    # Optional Nextcloud credentials (if share requires auth)
+    NEXTCLOUD_USERNAME=
+    NEXTCLOUD_PASSWORD=
+
+    # Teacher name to search for in schedules
+    TARGET_TEACHER=Бровко Н.В.
+    ```
 
 ## Usage
 
@@ -147,7 +163,11 @@ The project includes automated GitHub Actions workflow that:
 
 1. Go to your repository → Settings → Secrets and variables → Actions
 2. Add these secrets:
-   - `FOLDER_ID` - Google Drive folder ID
+   - `STORAGE_TYPE` - Storage backend: `google_drive` or `nextcloud`
+   - `FOLDER_ID` - Google Drive folder ID (for `google_drive`)
+   - `NEXTCLOUD_URL` - Nextcloud share URL (for `nextcloud`)
+   - `NEXTCLOUD_USERNAME` - Nextcloud username (optional)
+   - `NEXTCLOUD_PASSWORD` - Nextcloud password (optional)
    - `TARGET_TEACHER` - Teacher name to search for
 
 ## Project Structure
@@ -159,11 +179,32 @@ py_schedule/
 ├── .env                   # Environment variables (not committed)
 ├── .gitignore
 ├── sample.env             # Template for .env
+├── converter.py           # DOCX to PDF conversion utility
 ├── parser.py              # Main parser script
 ├── schedule.json          # Generated output
+├── storage.py             # Storage strategies (Strategy pattern)
 ├── WEEK_ALGORITHM.md      # Week detection algorithm
+├── pdfs/                  # Downloaded schedule PDFs (not committed)
 └── venv/                  # Virtual environment (not committed)
     └── ...
+```
+
+## Extending Storage Backends
+
+The project uses the **Strategy pattern** to support multiple storage backends. To add a new backend:
+
+1. Create a new class inheriting from `storage.ScheduleStorage`
+2. Implement `get_schedule_files(self) -> List[str]`
+3. Register the new backend in `storage.create_storage()`
+
+Example:
+```python
+from storage import ScheduleStorage
+
+class MyStorage(ScheduleStorage):
+    def get_schedule_files(self) -> List[str]:
+        # Download files and return list of local PDF paths
+        ...
 ```
 
 ## Algorithm
