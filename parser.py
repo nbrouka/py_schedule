@@ -204,24 +204,23 @@ def extract_teacher_text(content, teacher_name):
         return content
     
     # Find the start of the teacher's lesson (look for pattern before teacher name)
-    # Pattern: week number (e.g., "1н.", "2н.", "3н.") or range (e.g., "1-12 нед")
+    # Pattern: week number (e.g., "1н.", "2н.", "3н.", "2 нед.", "4 нед.") or range (e.g., "1-12 нед")
     week_patterns = [
         r'\d+н\.?',  # 1н., 2н., etc.
         r'\d+-\d+нед',  # 1-12 нед
+        r'\d+\s*нед\.?',  # 2 нед., 4 нед., etc.
     ]
     
     before_teacher = content[:teacher_pos]
     
-    # Find the FIRST week pattern (not last) - we need to include the week number
-    first_week_pos = len(content)
+    # Find the LAST week pattern before the teacher's name
+    last_week_match = None
     for pattern in week_patterns:
-        match = re.search(pattern, before_teacher, re.IGNORECASE)
-        if match and match.start() < first_week_pos:
-            first_week_pos = match.start()
+        for m in re.finditer(pattern, before_teacher, re.IGNORECASE):
+            last_week_match = m
     
-    # If we found a week pattern, start from there
-    if first_week_pos < len(content):
-        start = first_week_pos
+    if last_week_match:
+        start = last_week_match.start()
     else:
         start = 0
     
@@ -411,7 +410,7 @@ def parse(pdf_bytes, teacher_name, default_group=""):
                                     week_type = "all"
                                 
                                 # Fix the regex to use proper Cyrillic characters
-                                parts = re.split(r'(?=\b\d+н\.\s|[\d-]+нед\.\s)', content)
+                                parts = re.split(r'(?=\b\d+н\.\s|[\d-]+\s*нед\.\s)', content)
                                 
                                 for part in parts:
                                     if part.strip() and teacher_name.lower() in part.lower():
